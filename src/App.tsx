@@ -127,6 +127,8 @@ export default function App() {
   const [isRegModalOpen, setIsRegModalOpen] = useState(false);
   const [selectedRegForCompare, setSelectedRegForCompare] = useState<Regulation | null>(null);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const [isComparingAll, setIsComparingAll] = useState(false);
+  const [isCompareResultOpen, setIsCompareResultOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -355,6 +357,15 @@ export default function App() {
       }
       simulateAnalysis(file);
     }
+  };
+
+  const handleCompareAll = () => {
+    setIsComparingAll(true);
+    // Simulate deep cross-document analysis
+    setTimeout(() => {
+      setIsComparingAll(false);
+      setIsCompareResultOpen(true);
+    }, 2500);
   };
 
   const handleLexiChat = async () => {
@@ -964,10 +975,7 @@ export default function App() {
                             <p className="text-sm text-white/40">Добавляйте и сравнивайте внутренние политики компании</p>
                           </div>
                           <button 
-                            onClick={() => {
-                              alert('Система проверяет все документы на наличие противоречий...');
-                              setTimeout(() => alert('Проверка завершена. Противоречий между регламентами не выявлено.'), 2000);
-                            }}
+                            onClick={handleCompareAll}
                             className="px-6 py-3 bg-violet-500 hover:bg-violet-600 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 shadow-lg shadow-violet-500/20"
                           >
                             <Search className="w-4 h-4" />
@@ -1634,6 +1642,106 @@ export default function App() {
 
                 <div className="pt-4">
                   <p className="text-[10px] text-white/20 text-center uppercase tracking-[0.2em]">Версия системы 2.4.1-stable</p>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Compare All Loading Overlay */}
+      <AnimatePresence>
+        {isComparingAll && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/90 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="relative flex flex-col items-center gap-8 text-center"
+            >
+              <div className="relative">
+                <div className="w-24 h-24 rounded-full border-4 border-violet-500/20 border-t-violet-500 animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Search className="w-8 h-8 text-violet-400" />
+                </div>
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold mb-2">Перекрестный анализ регламентов</h3>
+                <p className="text-white/40 max-w-xs mx-auto">ИИ проверяет все документы на наличие логических противоречий и правовых коллизий...</p>
+              </div>
+              <div className="flex gap-2">
+                <Badge variant="neon">OCR</Badge>
+                <Badge variant="neon">NLP</Badge>
+                <Badge variant="neon">Legal-LLM</Badge>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Compare All Result Modal */}
+      <AnimatePresence>
+        {isCompareResultOpen && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setIsCompareResultOpen(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-2xl bg-[#121212] border border-white/10 rounded-[40px] p-10 shadow-2xl overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 p-8 opacity-5">
+                <CheckCircle className="w-40 h-40 text-emerald-500" />
+              </div>
+
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 flex items-center justify-center">
+                    <CheckCircle className="w-6 h-6 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-bold">Результат сравнения</h3>
+                    <p className="text-sm text-white/40">Анализ завершен успешно</p>
+                  </div>
+                </div>
+                <button onClick={() => setIsCompareResultOpen(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="p-6 rounded-3xl bg-emerald-500/5 border border-emerald-500/20">
+                  <p className="text-emerald-400 font-medium leading-relaxed">
+                    В ходе перекрестного анализа всех загруженных регламентов критических противоречий и правовых коллизий не выявлено. Ваши внутренние политики согласованы между собой.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+                    <div className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-1">Проверено документов</div>
+                    <div className="text-2xl font-bold">{state.regulations.length || 12}</div>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+                    <div className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-1">Выявлено коллизий</div>
+                    <div className="text-2xl font-bold text-emerald-400">0</div>
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <button 
+                    onClick={() => setIsCompareResultOpen(false)}
+                    className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    Понятно, спасибо
+                  </button>
                 </div>
               </div>
             </motion.div>

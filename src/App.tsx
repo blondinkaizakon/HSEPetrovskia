@@ -107,6 +107,7 @@ export default function App() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [extractedClauses, setExtractedClauses] = useState<string[]>([]);
   const [showSegmentSelector, setShowSegmentSelector] = useState(true);
   
@@ -163,20 +164,30 @@ export default function App() {
       const nextStep = prev.questStep + 1;
       const isCompleted = nextStep >= questions.length;
 
+      // If completed, we don't immediately set isQuestCompleted to true
+      // Instead, we might want to show a final upload step
+      
       return {
         ...prev,
         healthScore: Math.min(100, Math.max(0, prev.healthScore + impact)),
         categoryScores: newCategoryScores,
         risks: newRisks,
-        questStep: isCompleted ? 0 : nextStep,
+        questStep: nextStep,
         isQuestCompleted: isCompleted,
-        selectedQuestCategory: isCompleted ? null : prev.selectedQuestCategory,
+        selectedQuestCategory: isCompleted ? prev.selectedQuestCategory : prev.selectedQuestCategory,
       };
     });
+  };
 
-    if (state.questStep + 1 >= questions.length) {
-      setTimeout(() => setActiveTab('dashboard'), 1000);
-    }
+  const completeQuest = () => {
+    setState(prev => ({
+      ...prev,
+      isQuestCompleted: true,
+      selectedQuestCategory: null,
+      questStep: 0
+    }));
+    setActiveTab('matrix');
+    logActivity(`Завершен квест по категории: ${state.selectedQuestCategory}`, 'quest');
   };
 
   const logActivity = (action: string, type: ActivityLog['type']) => {
@@ -265,14 +276,17 @@ export default function App() {
       setIsExtracting(true);
       setExtractedClauses([]);
       
+      // Artificial delay for OCR visibility
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
       // Phase 2: AI Analysis
+      setIsExtracting(false);
       setIsAnalyzing(true);
       
       const result = await analyzeDocument(file);
       
       setExtractedClauses(result.clauses);
-      setIsExtracting(false);
-
+      
       const newRisk: Risk = {
         id: `r-audit-${Date.now()}`,
         title: result.risk.title || `Несоответствие в ${fileName}`,
@@ -324,6 +338,10 @@ export default function App() {
   const handleFolderUpload = (e: React.ChangeEvent<HTMLInputElement>, categoryId: string) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+        alert('Пожалуйста, загрузите документ в формате PDF. Форматы DOC и DOCX временно не поддерживаются.');
+        return;
+      }
       simulateAnalysis(file, categoryId);
     }
   };
@@ -331,6 +349,10 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+        alert('Пожалуйста, загрузите документ в формате PDF. Форматы DOC и DOCX временно не поддерживаются.');
+        return;
+      }
       simulateAnalysis(file);
     }
   };
@@ -425,7 +447,10 @@ export default function App() {
         </div>
 
         <div className="mt-auto flex flex-col gap-4">
-          <button className="p-3 rounded-xl text-white/20 hover:text-white transition-colors">
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className="p-3 rounded-xl text-white/20 hover:text-white transition-colors"
+          >
             <Settings className="w-6 h-6" />
           </button>
         </div>
@@ -672,86 +697,135 @@ export default function App() {
                     ))}
                   </div>
                 ) : (
-                  <div className={cn(
-                    "bg-white/[0.02] border border-white/5 rounded-3xl p-12 relative overflow-hidden max-w-2xl mx-auto",
-                    state.segment === 'large' && "border-violet-500/20 bg-violet-500/[0.02]"
-                  )}>
-                    <div className="absolute top-0 left-0 w-full h-1 bg-white/5">
-                      <motion.div 
-                        className={cn("h-full", state.segment === 'small' ? "bg-cyan-500" : "bg-violet-500")}
-                        initial={{ width: 0 }}
-                        animate={{ width: `${(state.questStep / questions.length) * 100}%` }}
-                      />
-                    </div>
+                  state.questStep >= questions.length ? (
+                    <div className="bg-white/[0.02] border border-white/5 rounded-[48px] p-12 text-center max-w-2xl mx-auto">
+                      <div className="w-24 h-24 rounded-full bg-emerald-500/20 flex items-center justify-center mx-auto mb-8">
+                        <CheckCircle className="w-12 h-12 text-emerald-400" />
+                      </div>
+                      <h2 className="text-4xl font-black mb-4">Квест пройден!</h2>
+                      <p className="text-white/40 mb-12 max-w-md mx-auto">
+                        Вы ответили на все вопросы. Для более глубокого анализа и выявления скрытых коллизий, загрузите основной регламент по этой теме.
+                      </p>
+                      
+                      <div className="max-w-md mx-auto p-8 rounded-3xl border-2 border-dashed border-white/10 bg-white/[0.01] mb-12">
+                        <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 flex items-center justify-center mx-auto mb-4">
+                          <Upload className="w-6 h-6 text-cyan-400" />
+                        </div>
+                        <h4 className="text-sm font-bold mb-2">Загрузите итоговый документ</h4>
+                        <p className="text-[10px] text-rose-400 font-bold uppercase tracking-widest mb-6">Внимание: Поддерживается только формат PDF</p>
+                        <button 
+                          onClick={() => fileInputRef.current?.click()}
+                          className="px-8 py-4 bg-cyan-500 text-black font-bold rounded-2xl hover:scale-105 transition-all shadow-lg shadow-cyan-500/20"
+                        >
+                          {isAnalyzing ? 'Анализ...' : 'Выбрать PDF'}
+                        </button>
+                        <input 
+                          type="file" 
+                          ref={fileInputRef} 
+                          onChange={handleFileUpload}
+                          className="hidden" 
+                          accept=".pdf"
+                        />
+                      </div>
 
-                    <div className="mb-12">
-                      <div className="flex items-center justify-between mb-4">
-                        <span className={cn(
-                          "text-[10px] font-bold uppercase tracking-[0.2em] block",
-                          state.segment === 'small' ? "text-cyan-400" : "text-violet-400"
-                        )}>
-                          {state.segment === 'small' ? 'Диагностический квест' : 'Анализ регламентов'} • {state.questStep + 1} / {questions.length}
-                        </span>
-                        {state.selectedQuestCategory && (
-                          <button 
-                            onClick={() => setState(s => ({ ...s, selectedQuestCategory: null }))}
-                            className="text-[10px] font-bold text-white/20 hover:text-white uppercase tracking-widest transition-colors"
-                          >
-                            Сменить категорию
-                          </button>
+                      <div className="flex gap-4 justify-center">
+                        <button 
+                          onClick={() => setState(s => ({ ...s, selectedQuestCategory: null, questStep: 0 }))}
+                          className="px-8 py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-bold transition-all"
+                        >
+                          К выбору категорий
+                        </button>
+                        <button 
+                          onClick={completeQuest}
+                          className="px-8 py-4 bg-violet-500 text-white font-bold rounded-2xl hover:scale-105 transition-all shadow-lg shadow-violet-500/20"
+                        >
+                          Перейти к результатам (Матрица)
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={cn(
+                      "bg-white/[0.02] border border-white/5 rounded-3xl p-12 relative overflow-hidden max-w-2xl mx-auto",
+                      state.segment === 'large' && "border-violet-500/20 bg-violet-500/[0.02]"
+                    )}>
+                      <div className="absolute top-0 left-0 w-full h-1 bg-white/5">
+                        <motion.div 
+                          className={cn("h-full", state.segment === 'small' ? "bg-cyan-500" : "bg-violet-500")}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(state.questStep / questions.length) * 100}%` }}
+                        />
+                      </div>
+
+                      <div className="mb-12">
+                        <div className="flex items-center justify-between mb-4">
+                          <span className={cn(
+                            "text-[10px] font-bold uppercase tracking-[0.2em] block",
+                            state.segment === 'small' ? "text-cyan-400" : "text-violet-400"
+                          )}>
+                            {state.segment === 'small' ? 'Диагностический квест' : 'Анализ регламентов'} • {state.questStep + 1} / {questions.length}
+                          </span>
+                          {state.selectedQuestCategory && (
+                            <button 
+                              onClick={() => setState(s => ({ ...s, selectedQuestCategory: null }))}
+                              className="text-[10px] font-bold text-white/20 hover:text-white uppercase tracking-widest transition-colors"
+                            >
+                              Сменить категорию
+                            </button>
+                          )}
+                        </div>
+                        <h2 className="text-3xl font-bold leading-tight">
+                          {state.segment === 'large' && <span className="text-violet-400 block text-sm mb-2 uppercase tracking-widest">Давай разберемся с твоими регламентами:</span>}
+                          {currentQuestion.text}
+                        </h2>
+                        
+                        {/* Document Upload in Quest */}
+                        {currentQuestion.requiresUpload && (
+                          <div className="mt-8 p-8 rounded-3xl border-2 border-dashed border-white/10 bg-white/[0.01] text-center">
+                            <div className="w-12 h-12 rounded-2xl bg-violet-500/10 flex items-center justify-center mx-auto mb-4">
+                              <Upload className="w-6 h-6 text-violet-400" />
+                            </div>
+                            <h4 className="text-sm font-bold mb-2">Загрузите документ для анализа</h4>
+                            <p className="text-[10px] text-rose-400 font-bold uppercase tracking-widest mb-6">Внимание: Поддерживается только формат PDF</p>
+                            <button 
+                              onClick={() => fileInputRef.current?.click()}
+                              className="px-6 py-3 bg-violet-500 hover:bg-violet-600 rounded-2xl text-xs font-bold transition-all shadow-lg shadow-violet-500/20"
+                            >
+                              Выбрать PDF
+                            </button>
+                            <input 
+                              type="file" 
+                              ref={fileInputRef} 
+                              onChange={handleFileUpload}
+                              className="hidden" 
+                              accept=".pdf"
+                            />
+                          </div>
                         )}
                       </div>
-                      <h2 className="text-3xl font-bold leading-tight">
-                        {state.segment === 'large' && <span className="text-violet-400 block text-sm mb-2 uppercase tracking-widest">Давай разберемся с твоими регламентами:</span>}
-                        {currentQuestion.text}
-                      </h2>
-                      
-                      {/* Document Upload in Quest */}
-                      {currentQuestion.requiresUpload && (
-                        <div className="mt-8 p-8 rounded-3xl border-2 border-dashed border-white/10 bg-white/[0.01] text-center">
-                          <div className="w-12 h-12 rounded-2xl bg-violet-500/10 flex items-center justify-center mx-auto mb-4">
-                            <Upload className="w-6 h-6 text-violet-400" />
-                          </div>
-                          <h4 className="text-sm font-bold mb-2">Загрузите документ для анализа</h4>
-                          <p className="text-[10px] text-white/40 uppercase tracking-widest mb-6">Система автоматически подсветит нарушения</p>
-                          <button 
-                            onClick={() => fileInputRef.current?.click()}
-                            className="px-6 py-3 bg-violet-500 hover:bg-violet-600 rounded-2xl text-xs font-bold transition-all shadow-lg shadow-violet-500/20"
-                          >
-                            Выбрать файл
-                          </button>
-                          <input 
-                            type="file" 
-                            ref={fileInputRef} 
-                            onChange={handleFileUpload}
-                            className="hidden" 
-                          />
-                        </div>
-                      )}
-                    </div>
 
-                    <div className="flex flex-col gap-4">
-                      {currentQuestion.options.map((option, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => handleQuestAnswer(option.impact, option.risk)}
-                          className={cn(
-                            "p-6 rounded-2xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.08] text-left transition-all group flex items-center justify-between",
-                            state.segment === 'small' ? "hover:border-cyan-500/50" : "hover:border-violet-500/50"
-                          )}
-                        >
-                          <span className={cn(
-                            "font-medium transition-colors",
-                            state.segment === 'small' ? "group-hover:text-cyan-400" : "group-hover:text-violet-400"
-                          )}>{option.text}</span>
-                          <ChevronRight className={cn(
-                            "w-5 h-5 text-white/20 group-hover:translate-x-1 transition-all",
-                            state.segment === 'small' ? "group-hover:text-cyan-400" : "group-hover:text-violet-400"
-                          )} />
-                        </button>
-                      ))}
+                      <div className="flex flex-col gap-4">
+                        {currentQuestion.options.map((option, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => handleQuestAnswer(option.impact, option.risk)}
+                            className={cn(
+                              "p-6 rounded-2xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.08] text-left transition-all group flex items-center justify-between",
+                              state.segment === 'small' ? "hover:border-cyan-500/50" : "hover:border-violet-500/50"
+                            )}
+                          >
+                            <span className={cn(
+                              "font-medium transition-colors",
+                              state.segment === 'small' ? "group-hover:text-cyan-400" : "group-hover:text-violet-400"
+                            )}>{option.text}</span>
+                            <ChevronRight className={cn(
+                              "w-5 h-5 text-white/20 group-hover:translate-x-1 transition-all",
+                              state.segment === 'small' ? "group-hover:text-cyan-400" : "group-hover:text-violet-400"
+                            )} />
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )
                 )}
               </motion.div>
             )}
@@ -773,7 +847,7 @@ export default function App() {
                           ref={fileInputRef} 
                           onChange={handleFileUpload} 
                           className="hidden" 
-                          accept=".pdf,.jpg,.png,.doc,.docx"
+                          accept=".pdf"
                         />
                         <div 
                           onClick={() => fileInputRef.current?.click()}
@@ -788,11 +862,11 @@ export default function App() {
                           )}>
                             <Upload className={cn("w-8 h-8", (isAnalyzing || isExtracting) ? "text-cyan-400" : "text-white/20 group-hover:text-cyan-400")} />
                           </div>
-                          <div className="text-center">
+                          <div className="text-center px-4">
                             <p className="font-bold text-sm">
                               {isExtracting ? 'Распознавание...' : isAnalyzing ? 'AI Анализ...' : 'Загрузите документ'}
                             </p>
-                            <p className="text-[10px] text-white/40 uppercase tracking-wider mt-1">PDF, JPG, PNG до 10MB</p>
+                            <p className="text-[10px] text-rose-400 font-bold uppercase tracking-wider mt-1">Внимание: Только PDF до 10MB</p>
                           </div>
                         </div>
                       </div>
@@ -944,16 +1018,25 @@ export default function App() {
                           <div className="ml-auto">
                             <button 
                               onClick={() => fileInputRef.current?.click()}
-                              className="px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl text-sm font-bold transition-all flex items-center gap-2"
+                              disabled={isAnalyzing || isExtracting}
+                              className={cn(
+                                "px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl text-sm font-bold transition-all flex items-center gap-2",
+                                (isAnalyzing || isExtracting) && "opacity-50 cursor-wait"
+                              )}
                             >
-                              <Upload className="w-4 h-4 text-violet-400" />
-                              Загрузить документ
+                              {(isAnalyzing || isExtracting) ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
+                              ) : (
+                                <Upload className="w-4 h-4 text-violet-400" />
+                              )}
+                              {(isAnalyzing || isExtracting) ? 'Обработка...' : 'Загрузить документ'}
                             </button>
                             <input 
                               type="file" 
                               ref={fileInputRef} 
                               onChange={(e) => handleFolderUpload(e, state.activeFolderId!)}
                               className="hidden" 
+                              accept=".pdf"
                             />
                           </div>
                         </div>
@@ -1490,6 +1573,71 @@ export default function App() {
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setIsSettingsOpen(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md bg-[#121212] border border-white/10 rounded-[32px] p-8 shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <h3 className="text-xl font-bold">Настройки системы</h3>
+                <button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-white/40 mb-4">Сегмент бизнеса</h4>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setState(s => ({ ...s, segment: 'small' }))}
+                      className={cn(
+                        "flex-1 py-3 rounded-xl text-xs font-bold transition-all",
+                        state.segment === 'small' ? "bg-cyan-500 text-black" : "bg-white/5 text-white/40 hover:bg-white/10"
+                      )}
+                    >
+                      Малый бизнес
+                    </button>
+                    <button 
+                      onClick={() => setState(s => ({ ...s, segment: 'corporate' }))}
+                      className={cn(
+                        "flex-1 py-3 rounded-xl text-xs font-bold transition-all",
+                        state.segment === 'corporate' ? "bg-violet-500 text-white" : "bg-white/5 text-white/40 hover:bg-white/10"
+                      )}
+                    >
+                      Корпорация
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-white/40 mb-4">Уведомления</h4>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Критические риски</span>
+                    <div className="w-10 h-5 bg-cyan-500 rounded-full relative">
+                      <div className="absolute right-1 top-1 bottom-1 w-3 bg-black rounded-full" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <p className="text-[10px] text-white/20 text-center uppercase tracking-[0.2em]">Версия системы 2.4.1-stable</p>
+                </div>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

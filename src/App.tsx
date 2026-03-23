@@ -426,7 +426,7 @@ export default function App() {
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Главная' },
             { id: 'quest', icon: Target, label: state.segment === 'small' ? 'Квест' : 'Регламенты' },
-            { id: 'audit', icon: FileSearch, label: state.segment === 'small' ? 'Аудит' : 'Сравнение' },
+            { id: 'audit', icon: FileSearch, label: state.segment === 'small' ? 'Проверка документов' : 'Сравнение' },
             { id: 'matrix', icon: AlertTriangle, label: 'Матрица' },
             { id: 'profile', icon: User, label: 'Профиль' },
           ].map((item) => (
@@ -460,8 +460,8 @@ export default function App() {
       <main className="pl-20 min-h-screen">
         <header className="h-24 border-b border-white/5 flex items-center justify-between px-12 sticky top-0 bg-[#0A0A0A]/80 backdrop-blur-md z-40">
           <div>
-            <h1 className="text-xl font-black tracking-tight uppercase">СИСТЕМА ЮРИДИЧЕСКОЙ ЗАЩИТЫ <span className="text-cyan-400">V2.4</span></h1>
-            <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold">Аудит юридических рисков - Сделаем твой юридический путь безопасным вместе!</p>
+            <h1 className="text-xl font-black tracking-tight uppercase">ЮРИДИЧЕСКИЙ РИСК-МЕНЕДЖМЕНТ <span className="text-cyan-400">V2.4</span></h1>
+            <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold">Проверка юридических рисков - Сделаем твой юридический путь безопасным вместе!</p>
           </div>
 
           <div className="flex items-center gap-6">
@@ -841,7 +841,7 @@ export default function App() {
                   <>
                     <div className="col-span-12 lg:col-span-5 flex flex-col gap-8">
                       <div className="bg-white/[0.02] border border-white/5 rounded-3xl p-8">
-                        <h3 className="text-sm font-bold text-white/40 uppercase tracking-widest mb-6">Модуль глубокого аудита</h3>
+                        <h3 className="text-sm font-bold text-white/40 uppercase tracking-widest mb-6">Модуль глубокой проверки</h3>
                         <input 
                           type="file" 
                           ref={fileInputRef} 

@@ -43,8 +43,6 @@ export interface UserProfile {
   name: string;
   company: string;
   role: string;
-  level: number;
-  xp: number;
   avatar: string;
 }
 
@@ -71,11 +69,19 @@ export interface ActivityLog {
   type: 'quest' | 'audit' | 'task' | 'regulation';
 }
 
+export interface RagDocument {
+  id: string;
+  title: string;
+  content: string;
+  lastUpdated: string;
+}
+
 export interface AppState {
   healthScore: number;
   risks: Risk[];
   tasks: Task[];
   regulations: Regulation[];
+  ragDocuments: RagDocument[];
   activityLogs: ActivityLog[];
   categoryScores: {
     hr: number;
@@ -90,4 +96,5 @@ export interface AppState {
   user: UserProfile;
   activeFolderId: string | null;
   lastUploadedDocName: string | null;
+  summary?: string;
 }

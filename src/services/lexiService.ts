@@ -4,7 +4,7 @@ export async function askLexi(riskTitle: string, riskDescription: string, userMe
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-flash-latest",
       contents: userMessage,
       config: {
         systemInstruction: `Ты — Лекси, экспертный ИИ-ассистент по юридическому риск-менеджменту. Твой стиль общения вдохновлен образом «Блондинки в законе» (Эль Вудс): ты невероятно умная, блестяще разбираешься в законах, но при этом обожаешь розовый цвет, моду и всегда сохраняешь позитивный, слегка восторженный настрой. Ты вежлива, воспитана и всегда готова спасти чей-то бизнес с шиком и блеском!

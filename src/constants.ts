@@ -5,16 +5,22 @@ import {
   Gavel, 
   ShieldCheck, 
   Megaphone, 
-  Lock 
+  Lock,
+  FileSearch,
+  BookOpen,
+  Receipt
 } from 'lucide-react';
 
 export const DOCUMENT_CATEGORIES: DocumentCategory[] = [
   { id: 'procurement', title: 'Документы по закупкам', icon: ShoppingCart },
-  { id: 'labor', title: 'Документы по труду', icon: Briefcase },
-  { id: 'litigation', title: 'Документы о судебно-претензионной работе', icon: Gavel },
-  { id: 'personal_data', title: 'Документы по персональным данным', icon: ShieldCheck },
+  { id: 'hr', title: 'Документы по труду (HR)', icon: Briefcase },
+  { id: 'court', title: 'Документы о судебно-претензионной работе', icon: Gavel },
+  { id: 'infosec', title: 'Документы по персональным данным и ИБ', icon: ShieldCheck },
+  { id: 'tax', title: 'Налоговые документы', icon: Receipt },
   { id: 'advertising', title: 'Документы по рекламе', icon: Megaphone },
   { id: 'confidentiality', title: 'Документы по конфиденциальности', icon: Lock },
+  { id: 'lna_sync', title: 'Соответствие ЛНА', icon: FileSearch },
+  { id: 'rag_checklists', title: 'RAG: Чек-листы', icon: BookOpen },
 ];
 
 export const INITIAL_QUESTIONS: QuestQuestion[] = [
@@ -133,6 +139,54 @@ export const INITIAL_QUESTIONS: QuestQuestion[] = [
   },
 
   // II. Инфобез (ПД и КТ)
+  {
+    id: 'pdn-1',
+    category: 'infosec',
+    text: 'Определена ли цель обработки персональных данных для каждой категории данных?',
+    options: [
+      { text: 'Да, цели четко прописаны', impact: 5 },
+      { text: 'Нет или цели размыты (избыточность)', impact: -15, risk: { 
+        title: 'Избыточность обработки ПД', 
+        severity: 'Высокий', 
+        impact: 70, 
+        probability: 60, 
+        description: 'Нарушение ст. 5 ФЗ-152. Избыточность данных — это нарушение, влекущее штрафы до 700 тыс. руб.',
+        actionPlan: ['Привести категории данных в соответствие целям', 'Удалить избыточные данные']
+      } },
+    ]
+  },
+  {
+    id: 'tax-1',
+    category: 'tax',
+    text: 'Перед заключением договора вы всегда запрашиваете выписку из ЕГРЮЛ, устав и подтверждение полномочий руководителя?',
+    options: [
+      { text: 'Да, всегда', impact: 10 },
+      { text: 'Нет, доверяем партнерам', impact: -20, risk: { 
+        title: 'Отсутствие должной осмотрительности', 
+        severity: 'Критично', 
+        impact: 95, 
+        probability: 80, 
+        description: 'Риск доначисления налогов и отказа в вычетах по ст. 54.1 НК РФ.',
+        actionPlan: ['Внедрить регламент проверки контрагентов', 'Собрать досье на текущих партнеров']
+      } },
+    ]
+  },
+  {
+    id: 'tax-2',
+    category: 'tax',
+    text: 'Превышают ли ваши расчеты наличными денежными средствами с одним контрагентом сумму 100 000 рублей по одной сделке?',
+    options: [
+      { text: 'Нет, никогда', impact: 2 },
+      { text: 'Да, бывает', impact: -12, risk: { 
+        title: 'Нарушение лимита расчетов наличными', 
+        severity: 'Высокий', 
+        impact: 60, 
+        probability: 50, 
+        description: 'Нарушение указания ЦБ РФ № 5348-У, штраф по ст. 15.1 КоАП РФ.',
+        actionPlan: ['Перевести расчеты в безналичную форму', 'Провести аудит кассовых операций']
+      } },
+    ]
+  },
   {
     id: 'pd1',
     category: 'infosec',

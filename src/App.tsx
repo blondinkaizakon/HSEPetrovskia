@@ -32,14 +32,17 @@ import { Risk, Task, AppState, ChatMessage, Regulation, ActivityLog } from './ty
 import { INITIAL_QUESTIONS, CORPORATE_QUESTIONS, INITIAL_TASKS, DOCUMENT_CATEGORIES } from './constants';
 import { ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { askLexi } from './services/lexiService';
-import { analyzeDocument } from './services/aiService';
+import { analyzeDocument, compareTwoDocuments, compareAllDocuments } from './services/aiService';
 import { 
   Folder, 
   FileText, 
   ArrowLeft, 
   Search,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Sparkles,
+  BookOpen,
+  Scale
 } from 'lucide-react';
 
 // --- Components ---
@@ -76,9 +79,10 @@ export default function App() {
     risks: [],
     tasks: INITIAL_TASKS,
     regulations: [],
+    ragDocuments: [],
     activityLogs: [
-      { id: 'log-1', action: 'Завершен квест по ПДн', timestamp: '2026-03-22 10:30', user: 'Алексей Иванов', type: 'quest' },
-      { id: 'log-2', action: 'Добавлена задача: Доверенность', timestamp: '2026-03-22 11:15', user: 'Алексей Иванов', type: 'task' }
+      { id: 'log-1', action: 'Завершен квест по ПДн', timestamp: '2026-03-22 10:30', user: 'Елена Кузнецова', type: 'quest' },
+      { id: 'log-2', action: 'Добавлена задача: Доверенность', timestamp: '2026-03-22 11:15', user: 'Елена Кузнецова', type: 'task' }
     ],
     categoryScores: {
       hr: 0,
@@ -93,12 +97,10 @@ export default function App() {
     activeFolderId: null,
     lastUploadedDocName: null,
     user: {
-      name: 'Алексей Иванов',
-      company: 'ООО "ТехноСтарт"',
-      role: 'Генеральный директор',
-      level: 4,
-      xp: 2450,
-      avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix'
+      name: 'Елена Кузнецова',
+      company: 'ООО "ТехноСтартап"',
+      role: 'Бухгалтер',
+      avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=150&h=150'
     }
   });
 
@@ -126,10 +128,15 @@ export default function App() {
   const [newTaskDeadline, setNewTaskDeadline] = useState('');
   const [isRegModalOpen, setIsRegModalOpen] = useState(false);
   const [selectedRegForCompare, setSelectedRegForCompare] = useState<Regulation | null>(null);
+  const [compareWithRegId, setCompareWithRegId] = useState<string | null>(null);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
   const [isComparingAll, setIsComparingAll] = useState(false);
   const [isCompareResultOpen, setIsCompareResultOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [allCompareResult, setAllCompareResult] = useState<{ summary: string, conflicts: string[], healthScore: number } | null>(null);
+  const [isRagModalOpen, setIsRagModalOpen] = useState(false);
+  const questResultFileInputRef = useRef<HTMLInputElement>(null);
+  const questInnerFileInputRef = useRef<HTMLInputElement>(null);
+  const auditFolderFileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const questions = state.segment === 'small' 
@@ -271,24 +278,55 @@ export default function App() {
     }
 
     const fileName = file.name;
-    const previousDoc = state.lastUploadedDocName;
+    const isRag = categoryId === 'rag_checklists';
+    const isLnaSync = categoryId === 'lna_sync';
     
     try {
-      // Phase 1: Extraction (OCR)
       setIsExtracting(true);
       setExtractedClauses([]);
       
-      // Artificial delay for OCR visibility
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Get existing documents in this category for context
+      // For LNA Sync, we want ALL documents in that folder + RAG checklists to check for consistency
+      const folderDocs = state.regulations
+        .filter(r => r.category === categoryId)
+        .map(r => ({ title: r.title, content: r.content }));
       
-      // Phase 2: AI Analysis
+      const checklistDocs = state.ragDocuments.map(d => ({ title: d.title, content: d.content }));
+      
+      const existingDocs = [...folderDocs, ...checklistDocs];
+
+      const result = await analyzeDocument(file, categoryId, isRag, existingDocs);
+      
       setIsExtracting(false);
       setIsAnalyzing(true);
       
-      const result = await analyzeDocument(file);
-      
       setExtractedClauses(result.clauses);
       
+      if (isRag) {
+        const newRag: any = {
+          id: `rag-${Date.now()}`,
+          title: fileName,
+          content: result.summary || 'Чек-лист по базе знаний',
+          lastUpdated: new Date().toISOString().split('T')[0]
+        };
+        setState(prev => ({ ...prev, ragDocuments: [...prev.ragDocuments, newRag] }));
+        logActivity(`Добавлен чек-лист в базу знаний (RAG): ${fileName}`, 'regulation');
+      }
+
+      // Handle conflicts if they exist
+      const conflictRisks: Risk[] = (result.conflicts || []).map((c, i) => ({
+        id: `conflict-${Date.now()}-${i}`,
+        title: 'Юридическое противоречие',
+        description: c,
+        severity: 'Критично',
+        impact: 85,
+        probability: 90,
+        category: 'Коллизии',
+        status: 'open',
+        recommendation: 'Согласовать единую редакцию положений во всех документах.',
+        actionPlan: ['Выявить все зависимые договоры', 'Подготовить доп. соглашение об унификации условий']
+      }));
+
       const newRisk: Risk = {
         id: `r-audit-${Date.now()}`,
         title: result.risk.title || `Несоответствие в ${fileName}`,
@@ -296,7 +334,11 @@ export default function App() {
         severity: (result.risk.severity as any) || 'Критично',
         impact: 95,
         probability: 100,
-        category: 'Комплаенс',
+        category: categoryId === 'tax' ? 'Налоги' : 
+                  categoryId === 'advertising' ? 'Реклама' : 
+                  categoryId === 'infosec' ? 'Персональные данные' : 
+                  categoryId === 'court' ? 'Судебные риски' : 
+                  categoryId === 'lna_sync' ? 'Соответствие ЛНА' : 'Комплаенс',
         status: 'open',
         recommendation: result.risk.recommendation || 'Пересмотреть условия договора.',
         actionPlan: result.risk.actionPlan || [
@@ -312,23 +354,20 @@ export default function App() {
         content: result.clauses.join('\n'),
         category: categoryId || 'Uncategorized',
         lastUpdated: new Date().toISOString().split('T')[0],
-        risks: [newRisk]
+        risks: [newRisk, ...conflictRisks]
       };
 
       setState(prev => ({
         ...prev,
-        risks: [...prev.risks, newRisk],
+        risks: [...prev.risks, newRisk, ...conflictRisks],
         regulations: [...prev.regulations, newDoc],
-        healthScore: Math.max(0, prev.healthScore - 10),
-        lastUploadedDocName: fileName
+        healthScore: Math.max(0, prev.healthScore - (conflictRisks.length > 0 ? 25 : 10)),
+        lastUploadedDocName: fileName,
+        summary: result.summary
       }));
       
       setIsAnalyzing(false);
       logActivity(`Проведен аудит документа: ${fileName}`, 'quest');
-
-      if (previousDoc) {
-        alert(`Документ загружен. Сравнить с ранее загруженным регламентом: ${previousDoc}?`);
-      }
     } catch (error) {
       console.error("Analysis error:", error);
       setIsExtracting(false);
@@ -345,6 +384,7 @@ export default function App() {
         return;
       }
       simulateAnalysis(file, categoryId);
+      e.target.value = ''; // Reset input to allow same file upload
     }
   };
 
@@ -355,17 +395,39 @@ export default function App() {
         alert('Пожалуйста, загрузите документ в формате PDF. Форматы DOC и DOCX временно не поддерживаются.');
         return;
       }
-      simulateAnalysis(file);
+      simulateAnalysis(file, state.selectedQuestCategory || undefined);
+      e.target.value = ''; // Reset input
     }
   };
 
-  const handleCompareAll = () => {
-    setIsComparingAll(true);
-    // Simulate deep cross-document analysis
-    setTimeout(() => {
+  const handleCompareAll = async () => {
+    const docs = state.regulations
+      .filter(r => r.category === state.activeFolderId)
+      .map(r => ({ title: r.title, content: r.content }));
+      
+    // Include checklists in global comparison too
+    if (state.activeFolderId === 'lna_sync') {
+      const checklists = state.ragDocuments.map(d => ({ title: d.title, content: d.content }));
+      docs.push(...checklists);
+    }
+
+    if (docs.length < 2) {
+      alert('Необходимо как минимум 2 документа в этой папке для проведения перекрестного анализа.');
+      return;
+    }
+
+    try {
+      setIsComparingAll(true);
+      const result = await compareAllDocuments(docs);
+      setAllCompareResult(result);
       setIsComparingAll(false);
       setIsCompareResultOpen(true);
-    }, 2500);
+      logActivity(`Проведен перекрестный анализ папки: ${DOCUMENT_CATEGORIES.find(c => c.id === state.activeFolderId)?.title}`, 'regulation');
+    } catch (error) {
+      console.error("Compare All error:", error);
+      setIsComparingAll(false);
+      alert('Ошибка при выполнении перекрестного анализа.');
+    }
   };
 
   const handleLexiChat = async () => {
@@ -428,9 +490,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white font-sans selection:bg-cyan-500/30">
       {/* Sidebar */}
-      <nav className="fixed left-0 top-0 h-full w-20 border-r border-white/5 bg-black/40 flex flex-col items-center py-8 gap-8 z-50">
-        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
-          <Shield className="w-6 h-6 text-white" />
+      <nav className="fixed left-0 top-0 h-full w-16 md:w-20 border-r border-white/5 bg-black/40 flex flex-col items-center py-8 gap-8 z-50">
+        <div className="w-10 h-10 md:w-12 md:h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <Shield className="w-5 h-5 md:w-6 md:h-6 text-white" />
         </div>
         
         <div className="flex flex-col gap-4">
@@ -449,8 +511,8 @@ export default function App() {
                 activeTab === item.id ? "bg-cyan-500 text-black shadow-lg shadow-cyan-500/40" : "text-white/40 hover:text-white hover:bg-white/5"
               )}
             >
-              <item.icon className="w-6 h-6" />
-              <span className="absolute left-full ml-4 px-2 py-1 bg-white text-black text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap">
+              <item.icon className="w-5 h-5 md:w-6 md:h-6" />
+              <span className="hidden md:block absolute left-full ml-4 px-2 py-1 bg-white text-black text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap">
                 {item.label}
               </span>
             </button>
@@ -462,37 +524,27 @@ export default function App() {
             onClick={() => setIsSettingsOpen(true)}
             className="p-3 rounded-xl text-white/20 hover:text-white transition-colors"
           >
-            <Settings className="w-6 h-6" />
+            <Settings className="w-5 h-5 md:w-6 md:h-6" />
           </button>
         </div>
       </nav>
 
       {/* Main Content */}
-      <main className="pl-20 min-h-screen">
-        <header className="h-24 border-b border-white/5 flex items-center justify-between px-12 sticky top-0 bg-[#0A0A0A]/80 backdrop-blur-md z-40">
-          <div>
-            <h1 className="text-xl font-black tracking-tight uppercase">ЮРИДИЧЕСКИЙ РИСК-МЕНЕДЖМЕНТ <span className="text-cyan-400">V2.4</span></h1>
-            <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold">Проверка юридических рисков - Сделаем твой юридический путь безопасным вместе!</p>
+      <main className="pl-16 md:pl-20 min-h-screen">
+        <header className="h-20 md:h-24 border-b border-white/5 flex items-center justify-between px-6 md:px-12 sticky top-0 bg-[#0A0A0A]/80 backdrop-blur-md z-40">
+          <div className="flex flex-col">
+            <h1 className="text-sm md:text-xl font-black tracking-tight uppercase truncate max-w-[200px] md:max-w-none">ЮРИДИЧЕСКИЙ РИСК-МЕНЕДЖМЕНТ <span className="text-cyan-400">V2.4</span></h1>
+            <p className="hidden md:block text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold">Проверка юридических рисков - Сделаем твой юридический путь безопасным вместе!</p>
           </div>
 
-          <div className="flex items-center gap-6">
-            <div className="flex flex-col items-end">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white/40">УРОВЕНЬ</span>
-                <span className="text-lg font-black text-cyan-400">{state.user.level}</span>
-              </div>
-              <div className="w-32 h-1.5 bg-white/5 rounded-full mt-1 overflow-hidden">
-                <div className="h-full w-2/3 bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]" />
-              </div>
-            </div>
-            
-            <button onClick={() => setActiveTab('profile')} className="h-10 w-10 rounded-full border border-white/10 p-0.5 hover:border-cyan-500 transition-colors">
+          <div className="flex items-center gap-4 md:gap-6">
+            <button onClick={() => setActiveTab('profile')} className="h-8 w-8 md:h-10 md:w-10 rounded-full border border-white/10 p-0.5 hover:border-cyan-500 transition-colors">
               <img src={state.user.avatar} alt="Avatar" className="rounded-full" />
             </button>
           </div>
         </header>
 
-        <div className="p-12 max-w-7xl mx-auto">
+        <div className="p-6 md:p-12 max-w-7xl mx-auto">
           <AnimatePresence mode="wait">
             {activeTab === 'dashboard' && (
               <motion.div 
@@ -725,14 +777,14 @@ export default function App() {
                         <h4 className="text-sm font-bold mb-2">Загрузите итоговый документ</h4>
                         <p className="text-[10px] text-rose-400 font-bold uppercase tracking-widest mb-6">Внимание: Поддерживается только формат PDF</p>
                         <button 
-                          onClick={() => fileInputRef.current?.click()}
+                          onClick={() => questResultFileInputRef.current?.click()}
                           className="px-8 py-4 bg-cyan-500 text-black font-bold rounded-2xl hover:scale-105 transition-all shadow-lg shadow-cyan-500/20"
                         >
                           {isAnalyzing ? 'Анализ...' : 'Выбрать PDF'}
                         </button>
                         <input 
                           type="file" 
-                          ref={fileInputRef} 
+                          ref={questResultFileInputRef} 
                           onChange={handleFileUpload}
                           className="hidden" 
                           accept=".pdf"
@@ -798,14 +850,14 @@ export default function App() {
                             <h4 className="text-sm font-bold mb-2">Загрузите документ для анализа</h4>
                             <p className="text-[10px] text-rose-400 font-bold uppercase tracking-widest mb-6">Внимание: Поддерживается только формат PDF</p>
                             <button 
-                              onClick={() => fileInputRef.current?.click()}
+                              onClick={() => questInnerFileInputRef.current?.click()}
                               className="px-6 py-3 bg-violet-500 hover:bg-violet-600 rounded-2xl text-xs font-bold transition-all shadow-lg shadow-violet-500/20"
                             >
                               Выбрать PDF
                             </button>
                             <input 
                               type="file" 
-                              ref={fileInputRef} 
+                              ref={questInnerFileInputRef} 
                               onChange={handleFileUpload}
                               className="hidden" 
                               accept=".pdf"
@@ -844,253 +896,165 @@ export default function App() {
             {activeTab === 'audit' && (
               <motion.div 
                 key="audit"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="grid grid-cols-12 gap-8"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-12"
               >
-                {state.segment === 'small' ? (
+                {!state.activeFolderId ? (
                   <>
-                    <div className="col-span-12 lg:col-span-5 flex flex-col gap-8">
-                      <div className="bg-white/[0.02] border border-white/5 rounded-3xl p-8">
-                        <h3 className="text-sm font-bold text-white/40 uppercase tracking-widest mb-6">Модуль глубокой проверки</h3>
-                        <input 
-                          type="file" 
-                          ref={fileInputRef} 
-                          onChange={handleFileUpload} 
-                          className="hidden" 
-                          accept=".pdf"
-                        />
-                        <div 
-                          onClick={() => fileInputRef.current?.click()}
-                          className={cn(
-                            "aspect-video rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-4 transition-all cursor-pointer group",
-                            (isAnalyzing || isExtracting) ? "border-cyan-500/50 bg-cyan-500/5 cursor-wait" : "border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/5"
-                          )}
-                        >
-                          <div className={cn(
-                            "p-4 rounded-full transition-colors",
-                            (isAnalyzing || isExtracting) ? "bg-cyan-500/20 animate-pulse" : "bg-white/5 group-hover:bg-cyan-500/20"
-                          )}>
-                            <Upload className={cn("w-8 h-8", (isAnalyzing || isExtracting) ? "text-cyan-400" : "text-white/20 group-hover:text-cyan-400")} />
-                          </div>
-                          <div className="text-center px-4">
-                            <p className="font-bold text-sm">
-                              {isExtracting ? 'Распознавание...' : isAnalyzing ? 'AI Анализ...' : 'Загрузите документ'}
-                            </p>
-                            <p className="text-[10px] text-rose-400 font-bold uppercase tracking-wider mt-1">Внимание: Только PDF до 10MB</p>
-                          </div>
-                        </div>
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-2xl font-bold">Управление регламентами</h3>
+                        <p className="text-sm text-white/40">Добавляйте и сравнивайте внутренние политики компании</p>
                       </div>
-
-                      <div className="bg-white/[0.02] border border-white/5 rounded-3xl p-8">
-                        <h3 className="text-sm font-bold text-white/40 uppercase tracking-widest mb-6">OCR Обработка</h3>
-                        <div className="flex flex-col gap-4">
-                          {[
-                            { label: 'Распознавание текста', progress: isExtracting ? 45 : (isAnalyzing || extractedClauses.length > 0 ? 100 : 0) },
-                            { label: 'Извлечение сущностей', progress: isExtracting ? 0 : (isAnalyzing || extractedClauses.length > 0 ? 100 : 0) },
-                            { label: 'Анализ пунктов', progress: isAnalyzing ? 65 : (extractedClauses.length > 0 && !isAnalyzing ? 100 : 0) },
-                          ].map((item, idx) => (
-                            <div key={idx}>
-                              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider mb-2">
-                                <span className="text-white/40">{item.label}</span>
-                                <span className="text-cyan-400">{item.progress}%</span>
-                              </div>
-                              <ProgressBar value={item.progress} />
-                            </div>
-                          ))}
-                        </div>
+                      <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
+                        <button 
+                          onClick={handleCompareAll}
+                          className="w-full md:w-auto px-6 py-3 bg-violet-500 hover:bg-violet-600 rounded-2xl text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-500/20"
+                        >
+                          <Search className="w-4 h-4" />
+                          Сравнить все
+                        </button>
                       </div>
                     </div>
 
-                    <div className="col-span-12 lg:col-span-7 bg-white/[0.02] border border-white/5 rounded-3xl p-8 font-mono text-xs leading-relaxed overflow-hidden relative min-h-[400px]">
-                      <div className="absolute top-0 right-0 p-4">
-                        <Badge variant="neon">{isExtracting ? 'OCR' : isAnalyzing ? 'AI Анализ' : 'Ожидание'}</Badge>
-                      </div>
-                      <div className="text-white/40 mb-4"># DOCUMENT_STREAM_ID: {isExtracting || isAnalyzing ? '882-XQ' : '---'}</div>
-                      
-                      {isExtracting && (
-                        <div className="flex flex-col items-center justify-center h-full py-20 text-white/20">
-                          <Loader2 className="w-12 h-12 animate-spin mb-4" />
-                          <p className="uppercase tracking-widest text-[10px] font-bold">Сканирование документа...</p>
-                        </div>
-                      )}
-
-                      {!isExtracting && extractedClauses.length > 0 && (
-                        <div className="space-y-4">
-                          <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
-                            <h4 className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest mb-3">Извлеченные данные:</h4>
-                            <div className="space-y-2">
-                              {extractedClauses.map((clause, i) => (
-                                <motion.p 
-                                  initial={{ opacity: 0, x: -10 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  transition={{ delay: i * 0.1 }}
-                                  key={i} 
-                                  className="text-white/70"
-                                >
-                                  <span className="text-cyan-500/40 mr-2">»</span> {clause}
-                                </motion.p>
-                              ))}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {DOCUMENT_CATEGORIES.map(cat => {
+                        const docCount = state.regulations.filter(r => r.category === cat.id).length;
+                        const ragCount = state.ragDocuments.length;
+                        const count = cat.id === 'rag_checklists' ? ragCount : docCount;
+                        return (
+                          <button
+                            key={cat.id}
+                            onClick={() => setState(s => ({ ...s, activeFolderId: cat.id }))}
+                            className="group p-8 rounded-[32px] bg-white/[0.02] border border-white/5 hover:border-violet-500/30 transition-all text-left relative overflow-hidden"
+                          >
+                            <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mb-6 group-hover:bg-violet-500/20 group-hover:text-violet-400 transition-colors">
+                              <cat.icon className="w-6 h-6" />
                             </div>
-                          </div>
-
-                          {isAnalyzing && (
-                            <div className="flex items-center gap-3 text-violet-400 animate-pulse">
-                              <Shield className="w-4 h-4" />
-                              <span className="text-[10px] font-bold uppercase tracking-widest">ИИ проверяет соответствие регламентам...</span>
+                            <h4 className="font-bold text-lg mb-1">{cat.title}</h4>
+                            <p className="text-xs text-white/40">{count} документов</p>
+                            <div className="absolute top-0 right-0 p-6 opacity-0 group-hover:opacity-10 transition-opacity">
+                              <cat.icon className="w-20 h-20" />
                             </div>
-                          )}
-
-                          {!isAnalyzing && state.risks.some(r => r.id.startsWith('r-audit')) && (
-                            <motion.div 
-                              initial={{ opacity: 0, y: 10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              className="p-4 rounded-xl border border-rose-500/20 bg-rose-500/5 text-rose-400"
-                            >
-                              <div className="flex items-center gap-2 mb-2">
-                                <AlertTriangle className="w-4 h-4" />
-                                <span className="font-bold uppercase text-[10px] tracking-widest">Выявлена коллизия</span>
-                              </div>
-                              <p>{state.risks.filter(r => r.id.startsWith('r-audit')).sort((a, b) => b.id.localeCompare(a.id))[0]?.description}</p>
-                            </motion.div>
-                          )}
-                        </div>
-                      )}
-
-                      {!isExtracting && extractedClauses.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-full py-20 text-white/10">
-                          <FileSearch className="w-16 h-16 mb-4" />
-                          <p className="uppercase tracking-widest text-[10px] font-bold">Загрузите документ для начала проверки</p>
-                        </div>
-                      )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </>
                 ) : (
-                  <div className="col-span-12 space-y-8">
-                    {!state.activeFolderId ? (
-                      <>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="text-2xl font-bold">Управление регламентами</h3>
-                            <p className="text-sm text-white/40">Добавляйте и сравнивайте внутренние политики компании</p>
-                          </div>
-                          <button 
-                            onClick={handleCompareAll}
-                            className="px-6 py-3 bg-violet-500 hover:bg-violet-600 rounded-2xl text-sm font-bold transition-all flex items-center gap-2 shadow-lg shadow-violet-500/20"
-                          >
-                            <Search className="w-4 h-4" />
-                            Сравнить все
-                          </button>
-                        </div>
+                  <div className="space-y-8">
+                    <button 
+                      onClick={() => setState(s => ({ ...s, activeFolderId: null }))}
+                      className="flex items-center gap-2 text-white/40 hover:text-white transition-colors text-sm font-bold uppercase tracking-widest"
+                    >
+                      <ArrowLeft className="w-4 h-4" /> Назад к папкам
+                    </button>
+                    
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <h3 className="text-2xl md:text-3xl font-black">{DOCUMENT_CATEGORIES.find(c => c.id === state.activeFolderId)?.title}</h3>
+                      <div className="flex gap-4 w-full md:w-auto">
+                        <button 
+                          onClick={() => auditFolderFileInputRef.current?.click()}
+                          className="flex-1 md:flex-none px-6 py-3 bg-violet-500 text-white rounded-2xl text-sm font-bold hover:scale-105 transition-all shadow-lg shadow-violet-500/20 flex items-center justify-center gap-2"
+                        >
+                          <Plus className="w-4 h-4" /> {state.activeFolderId === 'rag_checklists' ? 'Загрузить чек-лист' : 'Загрузить документ'}
+                        </button>
+                        <input 
+                          type="file" 
+                          ref={auditFolderFileInputRef} 
+                          onChange={(e) => handleFolderUpload(e, state.activeFolderId!)} 
+                          className="hidden"
+                          accept=".pdf"
+                        />
+                      </div>
+                    </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {DOCUMENT_CATEGORIES.map(cat => {
-                            const docCount = state.regulations.filter(r => r.category === cat.id).length;
-                            return (
-                              <button
-                                key={cat.id}
-                                onClick={() => setState(s => ({ ...s, activeFolderId: cat.id }))}
-                                className="group p-8 rounded-[32px] bg-white/[0.02] border border-white/5 hover:border-violet-500/30 transition-all text-left relative overflow-hidden"
-                              >
-                                <div className="w-14 h-14 rounded-2xl bg-violet-500/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                                  <cat.icon className="w-7 h-7 text-violet-400" />
+                    <div className="space-y-4">
+                      {state.activeFolderId === 'rag_checklists' ? (
+                        state.ragDocuments.length > 0 ? (
+                          state.ragDocuments.map(doc => (
+                            <div key={doc.id} className="p-6 rounded-3xl bg-white/[0.02] border border-white/5 flex flex-col md:flex-row items-start md:items-center justify-between hover:border-violet-500/20 transition-all group gap-4">
+                              <div className="flex items-center gap-4">
+                                <div className="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-400">
+                                  <BookOpen className="w-5 h-5" />
                                 </div>
-                                <h4 className="text-lg font-bold mb-2">{cat.title}</h4>
-                                <div className="flex items-center gap-2 text-white/40 text-xs">
-                                  <FileText className="w-3 h-3" />
-                                  <span>{docCount} документов</span>
+                                <div>
+                                  <h4 className="font-bold">{doc.title}</h4>
+                                  <p className="text-[10px] text-white/40 uppercase tracking-widest">{doc.lastUpdated}</p>
                                 </div>
-                                <div className="absolute top-0 right-0 p-6 opacity-0 group-hover:opacity-5 transition-opacity">
-                                  <cat.icon className="w-20 h-20" />
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="space-y-8">
-                        <div className="flex items-center gap-4">
-                          <button 
-                            onClick={() => setState(s => ({ ...s, activeFolderId: null }))}
-                            className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors"
-                          >
-                            <ArrowLeft className="w-5 h-5" />
-                          </button>
-                          <div>
-                            <h3 className="text-2xl font-bold">
-                              {DOCUMENT_CATEGORIES.find(c => c.id === state.activeFolderId)?.title}
-                            </h3>
-                            <p className="text-sm text-white/40">Загруженные документы и выявленные риски</p>
-                          </div>
-                          <div className="ml-auto">
-                            <button 
-                              onClick={() => fileInputRef.current?.click()}
-                              disabled={isAnalyzing || isExtracting}
-                              className={cn(
-                                "px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl text-sm font-bold transition-all flex items-center gap-2",
-                                (isAnalyzing || isExtracting) && "opacity-50 cursor-wait"
-                              )}
-                            >
-                              {(isAnalyzing || isExtracting) ? (
-                                <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
-                              ) : (
-                                <Upload className="w-4 h-4 text-violet-400" />
-                              )}
-                              {(isAnalyzing || isExtracting) ? 'Обработка...' : 'Загрузить документ'}
-                            </button>
-                            <input 
-                              type="file" 
-                              ref={fileInputRef} 
-                              onChange={(e) => handleFolderUpload(e, state.activeFolderId!)}
-                              className="hidden" 
-                              accept=".pdf"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 gap-4">
-                          {state.regulations.filter(r => r.category === state.activeFolderId).length === 0 ? (
-                            <div className="py-20 text-center bg-white/[0.01] border border-dashed border-white/5 rounded-3xl">
-                              <Folder className="w-12 h-12 text-white/10 mx-auto mb-4" />
-                              <p className="text-white/40">В этой папке пока нет документов</p>
+                              </div>
+                              <div className="flex gap-2 w-full md:w-auto mt-2 md:mt-0 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button className="flex-1 md:flex-none px-4 py-2 hover:bg-white/5 rounded-lg transition-colors border border-white/10 text-xs font-bold">Открыть</button>
+                                <button className="p-2 hover:bg-rose-500/20 rounded-lg transition-colors text-rose-500"><X className="w-4 h-4" /></button>
+                              </div>
                             </div>
-                          ) : (
-                            state.regulations
-                              .filter(r => r.category === state.activeFolderId)
-                              .map(doc => (
-                                <div key={doc.id} className="p-6 rounded-2xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-all">
-                                  <div className="flex items-start justify-between mb-4">
-                                    <div className="flex items-center gap-4">
-                                      <div className="w-12 h-12 rounded-xl bg-violet-500/10 flex items-center justify-center">
-                                        <FileText className="w-6 h-6 text-violet-400" />
-                                      </div>
-                                      <div>
-                                        <h4 className="font-bold">{doc.title}</h4>
-                                        <p className="text-xs text-white/40">Загружено: {doc.lastUpdated}</p>
-                                      </div>
-                                    </div>
-                                    <Badge variant={doc.risks && doc.risks.length > 0 ? 'danger' : 'neon'}>
-                                      {doc.risks && doc.risks.length > 0 ? `${doc.risks.length} рисков` : 'Чисто'}
-                                    </Badge>
-                                  </div>
-                                  
-                                  {doc.risks && doc.risks.length > 0 && (
-                                    <div className="space-y-3 mt-4 pt-4 border-t border-white/5">
-                                      {doc.risks.map(risk => (
-                                        <div key={risk.id} className="p-4 rounded-xl bg-rose-500/5 border border-rose-500/10">
-                                          <div className="flex items-center gap-2 mb-1">
-                                            <AlertCircle className="w-3 h-3 text-rose-400" />
-                                            <span className="text-xs font-bold text-rose-400 uppercase tracking-wider">{risk.title}</span>
-                                          </div>
-                                          <p className="text-xs text-white/60 leading-relaxed">{risk.description}</p>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
+                          ))
+                        ) : (
+                          <div className="py-20 text-center border-2 border-dashed border-white/5 rounded-3xl bg-white/[0.01]">
+                            <p className="text-white/40">В базе знаний пока нет чек-листов. Загрузите свои чек-листы для автоматизации проверок.</p>
+                          </div>
+                        )
+                      ) : (
+                        state.regulations.filter(r => r.category === state.activeFolderId).length > 0 ? (
+                          state.regulations.filter(r => r.category === state.activeFolderId).map(doc => (
+                            <div key={doc.id} className="p-6 rounded-3xl bg-white/[0.02] border border-white/5 flex flex-col md:flex-row items-start md:items-center justify-between hover:border-violet-500/20 transition-all group gap-4">
+                              <div className="flex items-center gap-4">
+                                <div className="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-400">
+                                  <FileText className="w-5 h-5" />
                                 </div>
-                              ))
-                          )}
+                                <div>
+                                  <h4 className="font-bold">{doc.title}</h4>
+                                  <p className="text-[10px] text-white/40 uppercase tracking-widest">{doc.lastUpdated}</p>
+                                </div>
+                              </div>
+                              <div className="flex gap-2 w-full md:w-auto">
+                                {doc.risks && doc.risks.length > 0 && <Badge variant="danger">Риск</Badge>}
+                                <button 
+                                  onClick={() => { setSelectedRegForCompare(doc); setIsCompareModalOpen(true); }}
+                                  className="flex-1 md:flex-none px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all"
+                                >
+                                  Сравнить
+                                </button>
+                                <button className="p-2 hover:bg-white/5 rounded-lg transition-colors"><X className="w-4 h-4 text-white/20" /></button>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="py-20 text-center border-2 border-dashed border-white/5 rounded-3xl bg-white/[0.01]">
+                            <p className="text-white/40">В этой папке пока нет документов.</p>
+                          </div>
+                        )
+                      )}
+                    </div>
+
+                    {state.activeFolderId !== 'rag_checklists' && state.summary && (
+                      <div className="mt-12 p-6 md:p-8 rounded-[40px] bg-gradient-to-br from-violet-500/10 to-cyan-500/10 border border-white/10 relative overflow-hidden">
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-3 mb-6">
+                            <Sparkles className="w-6 h-6 text-cyan-400 animate-pulse" />
+                            <h3 className="text-xl font-bold">Саммаризация и итог проверки</h3>
+                          </div>
+                          <div className="p-4 md:p-6 rounded-2xl bg-black/40 border border-white/5 mb-6">
+                            <p className="text-sm text-white/80 leading-relaxed italic mb-4">"{state.summary}"</p>
+                            
+                            {/* Display contradictions from state risks */}
+                            {state.risks.filter(r => r.category === 'Коллизии').length > 0 && (
+                              <div className="mt-4 space-y-3 pt-4 border-t border-white/10">
+                                <h4 className="text-[10px] font-bold text-rose-400 uppercase tracking-widest flex items-center gap-2">
+                                  <AlertCircle className="w-3 h-3" /> ОБНАРУЖЕНЫ ПРАВОВЫЕ КОЛЛИЗИИ:
+                                </h4>
+                                {state.risks.filter(r => r.category === 'Коллизии').map(conflict => (
+                                  <div key={conflict.id} className="p-3 rounded-xl bg-rose-500/5 border border-rose-500/10 text-xs text-rose-300">
+                                    {conflict.description}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none hidden md:block">
+                          <CheckCircle className="w-64 h-64 text-cyan-500" />
                         </div>
                       </div>
                     )}
@@ -1225,28 +1189,25 @@ export default function App() {
                 animate={{ opacity: 1, x: 0 }}
                 className="max-w-4xl mx-auto"
               >
-                <div className="bg-white/[0.02] border border-white/5 rounded-[40px] p-12 flex flex-col md:flex-row gap-12 items-center">
+                <div className="bg-white/[0.02] border border-white/5 rounded-[40px] p-8 md:p-12 flex flex-col md:flex-row gap-8 md:gap-12 items-center">
                   <div className="relative">
-                    <div className="w-48 h-48 rounded-full border-4 border-cyan-500/20 p-2">
+                    <div className="w-32 h-32 md:w-48 md:h-48 rounded-full border-4 border-cyan-500/20 p-2">
                       <img src={state.user.avatar} alt="Avatar" className="w-full h-full rounded-full" />
-                    </div>
-                    <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 px-4 py-1 bg-cyan-500 text-black text-xs font-black rounded-full">
-                      LVL {state.user.level}
                     </div>
                   </div>
 
                   <div className="flex-1 text-center md:text-left">
-                    <h2 className="text-4xl font-black mb-2">{state.user.name}</h2>
+                    <h2 className="text-3xl md:text-4xl font-black mb-2">{state.user.name}</h2>
                     <p className="text-cyan-400 font-bold mb-6">{state.user.role} @ {state.user.company}</p>
                     
-                    <div className="grid grid-cols-2 gap-4 mb-8">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
                       <div className="bg-white/5 p-4 rounded-2xl">
-                        <span className="text-[10px] text-white/40 uppercase font-bold block mb-1">Опыт (XP)</span>
-                        <span className="text-xl font-black">{state.user.xp}</span>
+                        <span className="text-[10px] text-white/40 uppercase font-bold block mb-1">Компания</span>
+                        <span className="text-lg font-black">{state.user.company}</span>
                       </div>
                       <div className="bg-white/5 p-4 rounded-2xl">
                         <span className="text-[10px] text-white/40 uppercase font-bold block mb-1">Задач решено</span>
-                        <span className="text-xl font-black">{state.tasks.filter(t => t.status === 'done').length}</span>
+                        <span className="text-lg font-black">{state.tasks.filter(t => t.status === 'done').length}</span>
                       </div>
                     </div>
 
@@ -1398,10 +1359,11 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-8 overflow-y-auto pr-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-y-auto pr-4">
                 <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-violet-500/10 border border-violet-500/20">
-                    <span className="text-[10px] font-bold text-violet-400 uppercase tracking-widest">Текущий: {selectedRegForCompare.title}</span>
+                  <div className="p-4 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-violet-400 uppercase tracking-widest">{selectedRegForCompare.title}</span>
+                    <Badge variant="neon">Документ А</Badge>
                   </div>
                   <div className="p-6 bg-white/[0.03] rounded-2xl border border-white/5 text-sm leading-relaxed text-white/60">
                     {selectedRegForCompare.content}
@@ -1409,16 +1371,33 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
-                    <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">Эталонный регламент (AI)</span>
+                  <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">Сравнить с:</span>
+                      <Badge variant="neon">Документ Б</Badge>
+                    </div>
+                    <select 
+                      value={compareWithRegId || ''} 
+                      onChange={(e) => setCompareWithRegId(e.target.value)}
+                      className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-xs text-white/70 outline-none focus:border-cyan-500/50"
+                    >
+                      <option value="">-- AI Эталон (рекомендации) --</option>
+                      {state.regulations.filter(r => r.id !== selectedRegForCompare.id).map(r => (
+                        <option key={r.id} value={r.id}>{r.title}</option>
+                      ))}
+                    </select>
                   </div>
                   <div className="p-6 bg-white/[0.03] rounded-2xl border border-white/5 text-sm leading-relaxed text-white/60">
-                    {selectedRegForCompare.content.split('\n').map((line, i) => (
-                      <p key={i} className={cn(i % 3 === 0 ? "text-cyan-400/80 bg-cyan-400/5 p-1 rounded" : "")}>
-                        {line}
-                        {i % 3 === 0 && <span className="block text-[10px] font-bold mt-1 text-cyan-500/50 uppercase tracking-tighter">[РЕКОМЕНДАЦИЯ: Добавить пункт о форс-мажоре]</span>}
-                      </p>
-                    ))}
+                    {compareWithRegId ? (
+                      state.regulations.find(r => r.id === compareWithRegId)?.content
+                    ) : (
+                      selectedRegForCompare.content.split('\n').map((line, i) => (
+                        <p key={i} className={cn(i % 3 === 0 ? "text-cyan-400/80 bg-cyan-400/5 p-1 rounded" : "")}>
+                          {line}
+                          {i % 3 === 0 && <span className="block text-[10px] font-bold mt-1 text-cyan-500/50 uppercase tracking-tighter">[РЕКОМЕНДАЦИЯ: Добавить пункт о форс-мажоре]</span>}
+                        </p>
+                      ))
+                    )}
                   </div>
                 </div>
               </div>
@@ -1527,15 +1506,19 @@ export default function App() {
               className="fixed right-0 top-0 h-full w-full max-w-md bg-[#121212] border-l border-white/10 z-[120] flex flex-col shadow-2xl"
             >
               <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-cyan-500/20 flex items-center justify-center">
-                    <MessageSquare className="w-5 h-5 text-cyan-400" />
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-pink-500/20 p-0.5 border border-pink-500/30">
+                      <img 
+                        src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150&h=150" 
+                        alt="Lexi" 
+                        className="w-full h-full rounded-lg object-cover"
+                      />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm">Чат с Лекси</h3>
+                      <p className="text-[10px] text-pink-400 font-bold uppercase tracking-widest">Юридический ассистент</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-sm">Чат с Лекси</h3>
-                    <p className="text-[10px] text-white/40 uppercase tracking-widest">Юридический ассистент</p>
-                  </div>
-                </div>
                 <button onClick={() => setIsLexiOpen(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
                   <X className="w-5 h-5" />
                 </button>
@@ -1545,9 +1528,14 @@ export default function App() {
                 {messages.map((msg, i) => (
                   <div key={i} className={cn("flex flex-col", msg.role === 'user' ? "items-end" : "items-start")}>
                     <div className={cn(
-                      "max-w-[85%] p-4 rounded-2xl text-sm leading-relaxed",
-                      msg.role === 'user' ? "bg-cyan-500 text-black font-medium rounded-tr-none" : "bg-white/5 border border-white/5 rounded-tl-none"
+                      "max-w-[85%] p-4 rounded-2xl text-sm leading-relaxed relative",
+                      msg.role === 'user' ? "bg-cyan-500 text-black font-medium rounded-tr-none" : "bg-white/5 border border-white/5 rounded-tl-none ml-2"
                     )}>
+                      {msg.role === 'assistant' && (
+                        <div className="absolute -left-10 top-0 w-8 h-8 rounded-lg overflow-hidden border border-pink-500/30">
+                          <img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150&h=150" alt="Lexi" className="w-full h-full object-cover" />
+                        </div>
+                      )}
                       {msg.content}
                     </div>
                   </div>
@@ -1683,7 +1671,116 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* LNA Sync Modal - Removed */}
+      <AnimatePresence>
+      </AnimatePresence>
+
       {/* Compare All Result Modal */}
+      {/* Global Analysis Overlay */}
+      <AnimatePresence>
+        {(isExtracting || isAnalyzing) && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[300] bg-black/95 backdrop-blur-2xl flex flex-col items-center justify-center p-6 text-center"
+          >
+            <div className="relative w-64 h-80 mb-12">
+              {/* Document Mockup */}
+              <motion.div 
+                animate={{ 
+                  rotateY: [0, 10, 0, -10, 0],
+                  scale: [1, 1.02, 1]
+                }}
+                transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+                className="w-full h-full bg-white/[0.03] border border-white/20 rounded-2xl p-8 shadow-2xl relative overflow-hidden"
+              >
+                {/* Skeleton Content */}
+                <div className="space-y-4">
+                  <div className="h-2 w-1/2 bg-white/10 rounded" />
+                  <div className="h-2 w-full bg-white/10 rounded" />
+                  <div className="h-2 w-full bg-white/10 rounded" />
+                  <div className="h-2 w-3/4 bg-white/10 rounded" />
+                  <div className="mt-8 h-2 w-1/3 bg-white/20 rounded" />
+                  <div className="h-2 w-full bg-white/10 rounded" />
+                  <div className="h-2 w-full bg-white/10 rounded" />
+                </div>
+
+                {/* Scanning Laser */}
+                <motion.div 
+                  animate={{ top: ['-10%', '110%'] }}
+                  transition={{ duration: 2.5, repeat: Infinity, ease: "linear" }}
+                  className="absolute left-0 right-0 h-[2px] bg-cyan-400 shadow-[0_0_15px_3px_rgba(34,211,238,0.8)] z-20"
+                />
+                
+                {/* Light Sweep */}
+                <motion.div 
+                  animate={{ top: ['-10%', '110%'] }}
+                  transition={{ duration: 2.5, repeat: Infinity, ease: "linear", delay: 0.1 }}
+                  className="absolute left-0 right-0 h-20 bg-gradient-to-b from-cyan-400/20 to-transparent pointer-events-none opacity-50"
+                />
+              </motion.div>
+
+              {/* Orbiting particles */}
+              <div className="absolute inset-0 -m-8 pointer-events-none">
+                {[0, 72, 144, 216, 288].map((angle, i) => (
+                  <motion.div
+                    key={i}
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 10 + i, repeat: Infinity, ease: "linear" }}
+                    className="absolute inset-0"
+                  >
+                    <div 
+                      className="w-2 h-2 rounded-full bg-cyan-500/40 blur-sm"
+                      style={{ transform: `translate(140px) rotate(${angle}deg)` }}
+                    />
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.3 }}
+              className="space-y-6"
+            >
+              <div className="space-y-2">
+                <h2 className="text-4xl font-black tracking-tighter text-white">
+                  {isExtracting ? "СКАНИРОВАНИЕ..." : "ИИ-АНАЛИЗ..."}
+                </h2>
+                <div className="flex items-center justify-center gap-4 text-cyan-400 font-mono text-[10px] tracking-[0.4em] uppercase">
+                  <span className="w-12 h-[1px] bg-cyan-900" />
+                  {isExtracting ? "Обработка слоев документа" : "Поиск коллизий и рисков"}
+                  <span className="w-12 h-[1px] bg-cyan-900" />
+                </div>
+              </div>
+              
+              <p className="text-white/40 text-xs max-w-sm mx-auto leading-relaxed">
+                {isExtracting 
+                  ? "Мы используем OCR нового поколения для распознавания каждого символа и сохранения юридической точности структуры."
+                  : "Наш ИИ сопоставляет текущие условия с вашими внутренними регламентами и базой знаний (RAG) для выявления скрытых противоречий."
+                }
+              </p>
+
+              <div className="flex items-center justify-center gap-2">
+                {[...Array(3)].map((_, i) => (
+                  <motion.div
+                    key={i}
+                    animate={{ 
+                      scale: [1, 1.5, 1],
+                      backgroundColor: ['rgba(34,211,238,0.2)', 'rgba(34,211,238,1)', 'rgba(34,211,238,0.2)']
+                    }}
+                    transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                    className="w-1.5 h-1.5 rounded-full"
+                  />
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isCompareResultOpen && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
@@ -1718,20 +1815,36 @@ export default function App() {
               </div>
 
               <div className="space-y-6">
-                <div className="p-6 rounded-3xl bg-emerald-500/5 border border-emerald-500/20">
-                  <p className="text-emerald-400 font-medium leading-relaxed">
-                    В ходе перекрестного анализа всех загруженных регламентов критических противоречий и правовых коллизий не выявлено. Ваши внутренние политики согласованы между собой.
+                <div className={`p-6 rounded-3xl border ${allCompareResult?.healthScore && allCompareResult.healthScore < 80 ? 'bg-rose-500/5 border-rose-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}`}>
+                  <p className={`${allCompareResult?.healthScore && allCompareResult.healthScore < 80 ? 'text-rose-400' : 'text-emerald-400'} font-medium leading-relaxed`}>
+                    {allCompareResult?.summary || 'В ходе перекрестного анализа всех загруженных регламентов критических противоречий и правовых коллизий не выявлено.'}
                   </p>
                 </div>
 
+                {allCompareResult && allCompareResult.conflicts.length > 0 && (
+                  <div className="space-y-4 max-h-[300px] overflow-y-auto pr-4">
+                    <h4 className="text-xs font-bold uppercase tracking-widest text-white/40">Выявленные коллизии:</h4>
+                    {allCompareResult.conflicts.map((conflict, i) => (
+                      <div key={i} className="p-4 rounded-2xl bg-white/5 border border-white/10 text-sm text-white/80 flex gap-4">
+                        <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0" />
+                        {conflict}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
-                    <div className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-1">Проверено документов</div>
-                    <div className="text-2xl font-bold">{state.regulations.length || 12}</div>
+                    <div className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-1">Проверено источников</div>
+                    <div className="text-2xl font-bold">
+                      {state.regulations.filter(r => r.category === state.activeFolderId).length + (state.activeFolderId === 'lna_sync' ? state.ragDocuments.length : 0)}
+                    </div>
                   </div>
                   <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
-                    <div className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-1">Выявлено коллизий</div>
-                    <div className="text-2xl font-bold text-emerald-400">0</div>
+                    <div className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-1">Оценка соответствия</div>
+                    <div className={`text-2xl font-bold ${allCompareResult?.healthScore && allCompareResult.healthScore < 80 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      {allCompareResult?.healthScore || 100}%
+                    </div>
                   </div>
                 </div>
 
